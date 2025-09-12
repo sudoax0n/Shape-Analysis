@@ -12,8 +12,6 @@ Used in Publications:
 >
 > URL: https://pubs.acs.org/doi/full/10.1021/acs.jpcb.4c07431
 
-
-
 # Installation
 
 To install, simply clone the repository.
@@ -28,7 +26,7 @@ Then go to the Shape Analysis folder. This program can automatically install dep
 
 Please use the below DOI to cite the code if you are using it.
 
-DOI: 
+> DOI: https://doi.org/10.5281/zenodo.17104429
 
 # Contact
 
