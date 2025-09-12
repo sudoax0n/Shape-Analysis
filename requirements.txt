@@ -1,0 +1,16 @@
+tifffile
+numpy
+matplotlib
+scikit-image
+opencv-python
+pandas
+shapely
+scipy
+plotly
+pillow
+alive-progress
+easygui
+czifile
+PyQt5
+pyvista
+pyvistaqt
