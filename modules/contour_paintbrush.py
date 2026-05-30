@@ -1,6 +1,8 @@
 # The code is written by Tanmay Pandey, for the Soft Matter Biophysic lab
+# Modified and extended by Abhinav (GitHub: https://github.com/sudoax0n), Soft Matter Biophysics Lab
 # Contact:
 #   Dr. Tripta Bhatia (Group Leader): bsoftmatter@gmail.com
+#   Abhinav: ms24115@gmail.com or https://github.com/sudoax0n
 #   Tanmay Pandey: ms22113@iisermohali.ac.in or itstanmaypandey@gmail.com
 # Please cite if using this program:
 #       [1] "Shape Analysis of Biomimetic and Plasma Membrane Vesicles" https://doi.org/10.1002/syst.202400052
@@ -28,21 +30,24 @@ class ROISelector:
         self.boundary_line, = self.ax.plot([], [], "y-", lw=2)
 
         # Buttons
-        ax_rect = plt.axes([0.82, 0.8, 0.15, 0.06])
-        ax_free = plt.axes([0.82, 0.7, 0.15, 0.06])
-        ax_tick = plt.axes([0.82, 0.55, 0.15, 0.06])
-        ax_reset = plt.axes([0.82, 0.45, 0.15, 0.06])
-        ax_finish = plt.axes([0.82, 0.3, 0.15, 0.06])
+        ax_rect = plt.axes([0.82, 0.82, 0.15, 0.06])
+        ax_free = plt.axes([0.82, 0.74, 0.15, 0.06])
+        ax_tick = plt.axes([0.82, 0.60, 0.15, 0.06])
+        ax_global = plt.axes([0.82, 0.52, 0.15, 0.06])
+        ax_reset = plt.axes([0.82, 0.38, 0.15, 0.06])
+        ax_finish = plt.axes([0.82, 0.26, 0.15, 0.06])
 
         self.btn_rect = Button(ax_rect, "Rectangle")
         self.btn_free = Button(ax_free, "Freeform")
         self.btn_tick = Button(ax_tick, "✔ Tick")
+        self.btn_global = Button(ax_global, "Apply Globally")
         self.btn_reset = Button(ax_reset, "⟳ Reset")
         self.btn_finish = Button(ax_finish, "⏹ Finish")
 
         self.btn_rect.on_clicked(lambda e: self.set_tool("rect"))
         self.btn_free.on_clicked(lambda e: self.set_tool("freeform"))
         self.btn_tick.on_clicked(lambda e: self.confirm_and_next())
+        self.btn_global.on_clicked(lambda e: self.apply_globally())
         self.btn_reset.on_clicked(lambda e: self.reset_roi())
         self.btn_finish.on_clicked(lambda e: self.finish())
 
@@ -54,9 +59,13 @@ class ROISelector:
         # Clear previous selection visuals
         self.boundary_line.set_data([], [])
         if self.selector:
-            self.selector.disconnect_events()
-            if hasattr(self.selector, 'patch') and self.selector.patch in self.ax.patches:
-                self.selector.patch.remove()
+            try:
+                self.selector.disconnect_events()
+                self.selector.set_visible(False)
+                if hasattr(self.selector, 'clear'):
+                    self.selector.clear()
+            except Exception:
+                pass
             self.selector = None
 
         # Initialize the new selector
@@ -97,6 +106,8 @@ class ROISelector:
             self.image_stack[self.current_frame], dtype=np.uint8
         )
         self.boundary_line.set_data([], [])
+        # Re-initialize tool to clear active drawings
+        self.set_tool(self.tool)
         self.fig.canvas.draw_idle()
 
     def confirm_and_next(self):
@@ -114,21 +125,35 @@ class ROISelector:
         else:
             print("✅ Last frame reached — use Finish")
 
-    def show_frame(self):
-        self.im.set_data(self.image_stack[self.current_frame])
-        self.boundary_line.set_data([], [])
+    def apply_globally(self):
+        mask = self.roi_masks[self.current_frame]
+        if np.any(mask > 0):
+            for i in range(len(self.image_stack)):
+                self.roi_masks[i] = mask.copy()
+                self.image_stack[i][mask == 0] = 0
+            print(f"✅ ROI applied globally to all {len(self.image_stack)} frames")
+            plt.close(self.fig)
+        else:
+            print("⚠️ No ROI drawn to apply globally")
 
-        # Remove previous selector patch
+    def show_frame(self):
+        # Completely clear axes to prevent handles and boxes from accumulating
+        self.ax.clear()
+        self.im = self.ax.imshow(self.image_stack[self.current_frame], cmap="gray")
+        self.boundary_line, = self.ax.plot([], [], "y-", lw=2)
+
+        # Remove previous selector
         if self.selector:
             try:
                 self.selector.disconnect_events()
-                if hasattr(self.selector, 'patch') and self.selector.patch in self.ax.patches:
-                    self.selector.patch.remove()
-            except:
+                self.selector.set_visible(False)
+                if hasattr(self.selector, 'clear'):
+                    self.selector.clear()
+            except Exception:
                 pass
             self.selector = None
 
-        # Re-initialize selector for this frame
+        # Re-initialize selector for the cleared axes
         self.set_tool(self.tool)
         self.fig.canvas.draw_idle()
 

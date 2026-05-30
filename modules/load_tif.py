@@ -1,6 +1,8 @@
 # The code is written by Tanmay Pandey, for the Soft Matter Biophysic lab
+# Modified and extended by Abhinav (GitHub: https://github.com/sudoax0n), Soft Matter Biophysics Lab
 # Contact:
 #   Dr. Tripta Bhatia (Group Leader): bsoftmatter@gmail.com
+#   Abhinav: ms24115@gmail.com or https://github.com/sudoax0n
 #   Tanmay Pandey: ms22113@iisermohali.ac.in or itstanmaypandey@gmail.com
 # Please cite if using this program:
 #       [1] "Shape Analysis of Biomimetic and Plasma Membrane Vesicles" https://doi.org/10.1002/syst.202400052
@@ -10,10 +12,63 @@ import tifffile as tiff
 import easygui as eg
 import os
 import numpy as np
+import cv2
 try:
     import czifile
 except ImportError:
     czifile = None
+
+def convert_to_grayscale_3d(image_stack):
+    image_stack = np.asarray(image_stack)
+    
+    # 1. Standardize 2D grayscale array to 3D shape (1, Y, X)
+    if image_stack.ndim == 2:
+        return image_stack[np.newaxis, ...]
+        
+    # 2. Check if 3D array is a single RGB/RGBA image of shape (Y, X, C)
+    if image_stack.ndim == 3:
+        if image_stack.shape[-1] in [3, 4]:
+            if image_stack.shape[-1] == 3:
+                gray = cv2.cvtColor(image_stack, cv2.COLOR_RGB2GRAY)
+            else:
+                gray = cv2.cvtColor(image_stack, cv2.COLOR_RGBA2GRAY)
+            return gray[np.newaxis, ...]
+        else:
+            # Already (Z, Y, X) grayscale
+            return image_stack
+            
+    # 3. Check if 4D array, e.g. (Z, Y, X, C) or (Z, C, Y, X)
+    if image_stack.ndim == 4:
+        # If the last dimension is 3 or 4, it is (Z, Y, X, C)
+        if image_stack.shape[-1] in [3, 4]:
+            gray_slices = []
+            for i in range(image_stack.shape[0]):
+                slice_img = image_stack[i]
+                if image_stack.shape[-1] == 3:
+                    gray = cv2.cvtColor(slice_img, cv2.COLOR_RGB2GRAY)
+                else:
+                    gray = cv2.cvtColor(slice_img, cv2.COLOR_RGBA2GRAY)
+                gray_slices.append(gray)
+            return np.stack(gray_slices, axis=0)
+        # If the second dimension is 3 or 4, it is (Z, C, Y, X)
+        elif image_stack.shape[1] in [3, 4]:
+            gray_slices = []
+            for i in range(image_stack.shape[0]):
+                slice_img = np.transpose(image_stack[i], (1, 2, 0)) # (C, Y, X) -> (Y, X, C)
+                if image_stack.shape[1] == 3:
+                    gray = cv2.cvtColor(slice_img, cv2.COLOR_RGB2GRAY)
+                else:
+                    gray = cv2.cvtColor(slice_img, cv2.COLOR_RGBA2GRAY)
+                gray_slices.append(gray)
+            return np.stack(gray_slices, axis=0)
+            
+    # If 5D or higher, squeeze all single dimensions and recurse
+    if image_stack.ndim > 4:
+        squeezed = np.squeeze(image_stack)
+        if squeezed.ndim < image_stack.ndim:
+            return convert_to_grayscale_3d(squeezed)
+            
+    return image_stack
 
 def load_image_file(file_path):
     ext = os.path.splitext(file_path)[1].lower()
@@ -44,7 +99,7 @@ def load_image_file(file_path):
             voxel_size_z = float(eg.enterbox(f"Voxel size Z (default {voxel_size_z})", "Confirm voxel size", str(voxel_size_z)))
             
                 
-            image_stack = np.squeeze(image_stack)
+            image_stack = convert_to_grayscale_3d(image_stack)
             return image_stack, voxel_size_x, voxel_size_y, voxel_size_z
 
     elif ext in [".tif", ".tiff"]:
@@ -72,6 +127,7 @@ def load_image_file(file_path):
             if not voxel_size_z or not eg.ynbox(f"Detected voxel size Z = {voxel_size_z}. Use this?", "Confirm"):
                 voxel_size_z = float(eg.enterbox("Enter voxel size Z", "SMBL"))
 
+            image_stack = convert_to_grayscale_3d(image_stack)
             return image_stack, voxel_size_x, voxel_size_y, voxel_size_z
 
     else:
