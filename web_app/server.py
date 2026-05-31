@@ -12,7 +12,7 @@ import numpy as np
 import cv2
 import pandas as pd
 from typing import List, Optional
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -37,20 +37,29 @@ app = FastAPI(title="SMBL - Shape Analysis Web App")
 # In a real environment, we'd use a session manager, but global store works perfectly for local single-user use.
 SESSION = {
     "file_path": None,
-    "raw_stack": None,       # 3D grayscale stack (Z, Y, X)
+    "raw_stack": None,           # 3D grayscale stack (Z, Y, X)
+    "raw_color_stack": None,     # 4D color stack (Z, Y, X, C)
     "voxel_x": 1e-6,
     "voxel_y": 1e-6,
     "voxel_z": 1e-6,
-    "preprocessed": None,   # normalized and stretched stack
-    "sliced_stack": None,   # cropped stack in Z range
-    "roi_cropped": None,    # stack with ROI crop applied
+    "preprocessed": None,       # normalized and stretched stack (gray)
+    "preprocessed_color": None, # normalized and stretched stack (color)
+    "sliced_stack": None,       # cropped stack in Z range (gray)
+    "sliced_color": None,       # cropped stack in Z range (color)
+    "roi_cropped": None,        # stack with ROI crop applied (gray)
+    "roi_cropped_color": None,  # stack with ROI crop applied (color)
     "z_min": 0,
     "z_max": 0,
 }
 
 # Helper to encode raw numpy image slice as Base64 PNG for browser rendering
-def encode_image_base64(image_2d: np.ndarray) -> str:
-    img = np.asarray(image_2d, dtype=np.uint8)
+def encode_image_base64(img: np.ndarray) -> str:
+    img = np.asarray(img, dtype=np.uint8)
+    if img.ndim == 3:
+        if img.shape[-1] == 3:
+            img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+        elif img.shape[-1] == 4:
+            img = cv2.cvtColor(img, cv2.COLOR_RGBA2BGRA)
     _, buffer = cv2.imencode('.png', img)
     b64_str = base64.b64encode(buffer).decode('utf-8')
     return f"data:image/png;base64,{b64_str}"
@@ -75,48 +84,68 @@ async def upload_microscope_file(file: UploadFile = File(...)):
         
     try:
         # Load stack and voxel information using load_tif module
-        image_stack, vx, vy, vz = load_image_file(temp_path)
-        if image_stack is None:
+        gray_stack, color_stack, vx, vy, vz = load_image_file(temp_path, return_color=True)
+        if gray_stack is None:
             raise HTTPException(status_code=400, detail="Failed to load file.")
             
-        # Standardize stack
-        image_stack = convert_to_grayscale_3d(image_stack)
-        
-        # Scale to uint8
-        image_stack = (image_stack - np.min(image_stack))
-        if np.max(image_stack) > 0:
-            image_stack = (image_stack / np.max(image_stack) * 255.0).astype(np.uint8)
+        # Scale gray stack to uint8
+        gray_stack = (gray_stack - np.min(gray_stack))
+        if np.max(gray_stack) > 0:
+            gray_stack = (gray_stack / np.max(gray_stack) * 255.0).astype(np.uint8)
         else:
-            image_stack = image_stack.astype(np.uint8)
+            gray_stack = gray_stack.astype(np.uint8)
+            
+        # Scale color stack to uint8
+        color_stack = (color_stack - np.min(color_stack))
+        if np.max(color_stack) > 0:
+            color_stack = (color_stack / np.max(color_stack) * 255.0).astype(np.uint8)
+        else:
+            color_stack = color_stack.astype(np.uint8)
             
         # Store in session
         SESSION["file_path"] = temp_path
-        SESSION["raw_stack"] = image_stack
+        SESSION["raw_stack"] = gray_stack
+        SESSION["raw_color_stack"] = color_stack
         SESSION["voxel_x"] = vx
         SESSION["voxel_y"] = vy
         SESSION["voxel_z"] = vz
         
-        # Apply initial histogram stretching
-        SESSION["preprocessed"] = np.stack(histogram_stretching(image_stack), axis=0)
+        # Apply initial histogram stretching to gray stack
+        SESSION["preprocessed"] = np.stack(histogram_stretching(gray_stack), axis=0)
+        
+        # Apply initial stretching to color stack
+        stretched_color_list = []
+        for i in range(color_stack.shape[0]):
+            img = color_stack[i]
+            min_val = np.min(img)
+            max_val = np.max(img)
+            if max_val > min_val:
+                stretched = ((img - min_val) / (max_val - min_val) * 255).astype(np.uint8)
+            else:
+                stretched = img.astype(np.uint8)
+            stretched_color_list.append(stretched)
+        SESSION["preprocessed_color"] = np.stack(stretched_color_list, axis=0)
         
         # Reset defaults
         SESSION["sliced_stack"] = SESSION["preprocessed"].copy()
+        SESSION["sliced_color"] = SESSION["preprocessed_color"].copy()
         SESSION["roi_cropped"] = SESSION["preprocessed"].copy()
+        SESSION["roi_cropped_color"] = SESSION["preprocessed_color"].copy()
         SESSION["z_min"] = 0
-        SESSION["z_max"] = len(image_stack) - 1
+        SESSION["z_max"] = len(gray_stack) - 1
         
-        # Previews
-        first_frame_b64 = encode_image_base64(SESSION["preprocessed"][0])
-        last_frame_b64 = encode_image_base64(SESSION["preprocessed"][-1])
+        # Previews using color stack
+        first_frame_b64 = encode_image_base64(SESSION["preprocessed_color"][0])
+        last_frame_b64 = encode_image_base64(SESSION["preprocessed_color"][-1])
         
         return JSONResponse(content={
             "filename": file.filename,
             "voxel_x": vx,
             "voxel_y": vy,
             "voxel_z": vz,
-            "total_frames": len(image_stack),
-            "height": image_stack.shape[1],
-            "width": image_stack.shape[2],
+            "total_frames": len(gray_stack),
+            "height": gray_stack.shape[1],
+            "width": gray_stack.shape[2],
             "first_frame_preview": first_frame_b64,
             "last_frame_preview": last_frame_b64
         })
@@ -142,13 +171,17 @@ async def slice_stack(req: SliceRangeRequest):
     SESSION["z_min"] = req.z_min
     SESSION["z_max"] = req.z_max
     
-    # Sliced stack
+    # Sliced stack (grayscale)
     SESSION["sliced_stack"] = SESSION["preprocessed"][req.z_min : req.z_max + 1].copy()
     SESSION["roi_cropped"] = SESSION["sliced_stack"].copy()
     
+    # Sliced stack (color)
+    SESSION["sliced_color"] = SESSION["preprocessed_color"][req.z_min : req.z_max + 1].copy()
+    SESSION["roi_cropped_color"] = SESSION["sliced_color"].copy()
+    
     # Previews of new range edges
-    first_b64 = encode_image_base64(SESSION["sliced_stack"][0])
-    last_b64 = encode_image_base64(SESSION["sliced_stack"][-1])
+    first_b64 = encode_image_base64(SESSION["sliced_color"][0])
+    last_b64 = encode_image_base64(SESSION["sliced_color"][-1])
     
     return JSONResponse(content={
         "total_sliced_frames": len(SESSION["sliced_stack"]),
@@ -171,6 +204,7 @@ async def apply_roi(req: BoundingBox):
         raise HTTPException(status_code=400, detail="No sliced stack available.")
         
     sliced = SESSION["sliced_stack"].copy()
+    sliced_color = SESSION["sliced_color"].copy()
     ny, nx = sliced.shape[1], sliced.shape[2]
     
     # Verify bounds
@@ -184,18 +218,22 @@ async def apply_roi(req: BoundingBox):
     if req.global_roi:
         for idx in range(len(sliced)):
             sliced[idx][mask == 0] = 0
+            sliced_color[idx][mask == 0] = 0
         SESSION["roi_cropped"] = sliced
+        SESSION["roi_cropped_color"] = sliced_color
         print(f"Applied Global Bounding Box ROI: x:[{xmin}, {xmax}], y:[{ymin}, {ymax}]")
     else:
         # Per frame crop
         if req.frame_idx is not None and 0 <= req.frame_idx < len(sliced):
             sliced[req.frame_idx][mask == 0] = 0
+            sliced_color[req.frame_idx][mask == 0] = 0
             SESSION["roi_cropped"] = sliced
+            SESSION["roi_cropped_color"] = sliced_color
             print(f"Applied ROI on slice {req.frame_idx}: x:[{xmin}, {xmax}], y:[{ymin}, {ymax}]")
             
     # Return preview of current active cropped frame
     preview_idx = req.frame_idx if (req.frame_idx and 0 <= req.frame_idx < len(sliced)) else 0
-    preview_b64 = encode_image_base64(SESSION["roi_cropped"][preview_idx])
+    preview_b64 = encode_image_base64(SESSION["roi_cropped_color"][preview_idx])
     
     return JSONResponse(content={
         "success": True,
@@ -204,13 +242,37 @@ async def apply_roi(req: BoundingBox):
 
 @app.get("/api/frame/{idx}")
 async def get_frame(idx: int):
-    if SESSION["roi_cropped"] is None:
+    if SESSION["roi_cropped_color"] is None:
         raise HTTPException(status_code=400, detail="No stack loaded.")
-    if idx < 0 or idx >= len(SESSION["roi_cropped"]):
+    if idx < 0 or idx >= len(SESSION["roi_cropped_color"]):
         raise HTTPException(status_code=404, detail="Frame index out of bounds.")
         
-    frame_b64 = encode_image_base64(SESSION["roi_cropped"][idx])
-    return JSONResponse(content={"frame_image": frame_b64})
+    img = SESSION["roi_cropped_color"][idx]
+    img = np.asarray(img, dtype=np.uint8)
+    if img.ndim == 3:
+        if img.shape[-1] == 3:
+            img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+        elif img.shape[-1] == 4:
+            img = cv2.cvtColor(img, cv2.COLOR_RGBA2BGRA)
+    _, buffer = cv2.imencode('.png', img)
+    return Response(content=buffer.tobytes(), media_type="image/png")
+
+@app.get("/api/frame_raw/{idx}")
+async def get_frame_raw(idx: int):
+    if SESSION["preprocessed_color"] is None:
+        raise HTTPException(status_code=400, detail="No stack loaded.")
+    if idx < 0 or idx >= len(SESSION["preprocessed_color"]):
+        raise HTTPException(status_code=404, detail="Frame index out of bounds.")
+        
+    img = SESSION["preprocessed_color"][idx]
+    img = np.asarray(img, dtype=np.uint8)
+    if img.ndim == 3:
+        if img.shape[-1] == 3:
+            img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+        elif img.shape[-1] == 4:
+            img = cv2.cvtColor(img, cv2.COLOR_RGBA2BGRA)
+    _, buffer = cv2.imencode('.png', img)
+    return Response(content=buffer.tobytes(), media_type="image/png")
 
 class SegmentPreviewRequest(BaseModel):
     frame_idx: int

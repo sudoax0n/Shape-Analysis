@@ -99,6 +99,7 @@ def select_contour_interactive(image_gray, title="Frame", init_thresh=None):
     current_contour = initial.copy() if initial is not None else None
     manual_used = False
     confirmed = {"val": False}  # mutable closure to detect confirm
+    global_applied = {"val": False, "threshold": 127}
     polygon_patch = None
 
     fig, ax = plt.subplots(figsize=(7, 7))
@@ -115,11 +116,13 @@ def select_contour_interactive(image_gray, title="Frame", init_thresh=None):
     ax_btn_confirm = fig.add_axes([0.78, 0.78, 0.18, 0.06])
     ax_btn_reset = fig.add_axes([0.78, 0.70, 0.18, 0.06])
     ax_btn_manual = fig.add_axes([0.78, 0.62, 0.18, 0.06])
+    ax_btn_global = fig.add_axes([0.78, 0.54, 0.18, 0.06])
     ax_slider = fig.add_axes([0.15, 0.05, 0.55, 0.04])
 
     btn_confirm = Button(ax_btn_confirm, "Confirm (→ next)")
     btn_reset = Button(ax_btn_reset, "Reset Auto")
     btn_manual = Button(ax_btn_manual, "Manual Polygon")
+    btn_global = Button(ax_btn_global, "Apply Globally")
     slider = Slider(ax_slider, "Threshold", 0, 255, valinit=127, valstep=1)
 
     # If we have an initial threshold guess, set slider
@@ -224,19 +227,27 @@ def select_contour_interactive(image_gray, title="Frame", init_thresh=None):
 
     btn_confirm.on_clicked(on_confirm)
 
+    def on_global(event):
+        global_applied["val"] = True
+        global_applied["threshold"] = int(slider.val)
+        confirmed["val"] = True
+        plt.close(fig)
+
+    btn_global.on_clicked(on_global)
+
     # Show window and block until closed (either confirm or user closes manually)
     plt.show()
 
-    # After closing, if confirmed, return contour and flag
+    # After closing, if confirmed, return contour and flag and global state
     if confirmed["val"] and current_contour is not None:
         contour = np.asarray(current_contour, dtype=np.int32)
         # ensure correct shape for cv2.drawContours: Nx1x2
         if contour.ndim == 2 and contour.shape[0] > 0:
-            return contour.reshape((-1, 1, 2)), True
+            return contour.reshape((-1, 1, 2)), manual_used, global_applied
     # if not confirmed but user closed window, return whatever current contour available and False
     if current_contour is None:
-        return None, False
-    return np.asarray(current_contour, dtype=np.int32).reshape((-1, 1, 2)), manual_used
+        return None, False, global_applied
+    return np.asarray(current_contour, dtype=np.int32).reshape((-1, 1, 2)), manual_used, global_applied
 
 # ---------------------------
 # Main script: iterate over files and frames
@@ -371,102 +382,105 @@ with alive_bar(len(files)) as bar:
         if montage:
             create_montage(image_stack,voxel_size_x, voxel_size_y, voxel_size_z,save_path=f"{file_path}")
         # Process each frame and use interactive selector
+        global_threshold_active = False
+        global_threshold_val = 127
+
         for idx, image in enumerate(image_stack):
             image = np.uint8(image)
             # blur and threshold initial for auto-contour smoothing
             blur = cv2.GaussianBlur(image, (5, 5), 3)
             _, thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_OTSU + cv2.THRESH_TOZERO)
 
-            # Find contours (auto)
-            contours, hierarchy = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            if len(contours) == 0:
-                # fallback: use entire image border
-                smoothed_contour = None
+            if global_threshold_active:
+                _, thresh_global = cv2.threshold(blur, global_threshold_val, 255, cv2.THRESH_TOZERO)
+                contours, hierarchy = cv2.findContours(thresh_global, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                if len(contours) == 0:
+                    contour_pts_cv2 = None
+                else:
+                    max_contour = max(contours, key=lambda c: cv2.arcLength(c, closed=True))
+                    try:
+                        smoothed_contour, _ = adjust_epsilon_for_circularity(max_contour, 0.2, 100)
+                    except Exception:
+                        smoothed_contour = max_contour
+                    contour_pts_cv2 = smoothed_contour
+                userSelect = False
             else:
-                max_contour = max(contours, key=lambda c: cv2.arcLength(c, closed=True))
-                # smoothing (if module available)
+                # Launch interactive selector for this frame, passing the raw image to prevent double drawing the contour
+                contour_pts_cv2, userSelect, global_state = select_contour_interactive(
+                    image, title=f"{os.path.basename(file_path)} - frame {idx}", init_thresh=127
+                )
+                
+                if global_state is not None and global_state.get("val"):
+                    global_threshold_active = True
+                    global_threshold_val = global_state.get("threshold", 127)
+                    print(f"Global threshold activated: {global_threshold_val}")
+
+            # Initialize metrics for this frame with safe default fallbacks
+            frame_metrics = {k: 0.0 for k in data.keys()}
+            for k in frame_metrics:
+                if k.startswith('Ellipse_'):
+                    frame_metrics[k] = np.nan
+
+            if contour_pts_cv2 is not None:
+                # compute metrics
                 try:
-                    smoothed_contour, _ = adjust_epsilon_for_circularity(max_contour, 0.2, 100)
-                except Exception:
-                    smoothed_contour = max_contour
-
-            # Visual image shown to user: use the thresholded display (imc)
-            imc = thresh.copy()
-            if smoothed_contour is not None and len(smoothed_contour) > 0:
-                cv2.drawContours(imc, [smoothed_contour], -1, (255, 255, 255), 2)
-
-            # Launch interactive selector for this frame
-            contour_pts_cv2, userSelect = select_contour_interactive(imc, title=f"{os.path.basename(file_path)} - frame {idx}")
-
-            # If nothing selected, skip this frame (make empty mask)
-            if contour_pts_cv2 is None:
-                print(f"Frame {idx}: no contour selected; skipping.")
-                contour_stack.append(np.zeros_like(thresh))
-                # append zero metrics
-                data['area'].append(0)
-                data['perimeter'].append(0)
-                data['area_pix'].append(0)
-                data['perim_pix'].append(0)
-                continue
-
-            # compute metrics
-            try:
-                # if `contour_pts_cv2` is Nx1x2, convert to Nx2
-                contour_pts_arr = contour_pts_cv2.reshape((-1, 2))
-                shapely_polygon = ShapelyPolygon(contour_pts_arr)
-                area = shapely_polygon.area
-                perim = shapely_polygon.length
-                circularity = 4 * np.pi * (area / (perim ** 2)) if perim > 0 else 0
-            except Exception:
-                # fallback to OpenCV measurements
-                try:
-                    area = cv2.contourArea(contour_pts_cv2)
-                    perim = cv2.arcLength(contour_pts_cv2, closed=True)
+                    contour_pts_arr = contour_pts_cv2.reshape((-1, 2))
+                    shapely_polygon = ShapelyPolygon(contour_pts_arr)
+                    area = shapely_polygon.area
+                    perim = shapely_polygon.length
                     circularity = 4 * np.pi * (area / (perim ** 2)) if perim > 0 else 0
                 except Exception:
-                    area = 0
-                    perim = 0
-                    circularity = 0
+                    try:
+                        area = cv2.contourArea(contour_pts_cv2)
+                        perim = cv2.arcLength(contour_pts_cv2, closed=True)
+                        circularity = 4 * np.pi * (area / (perim ** 2)) if perim > 0 else 0
+                    except Exception:
+                        area = 0.0
+                        perim = 0.0
+                        circularity = 0.0
 
-            print(f"Frame {idx}: Area: {area} | Perimeter: {perim} | Circularity: {circularity:.4f}")
+                print(f"Frame {idx}: Area: {area} | Perimeter: {perim} | Circularity: {circularity:.4f}")
 
-            # shape parameters (your module) - try/catch to avoid crashes
-            try:
-                shape_params = calculate_shape_parameters(contour_pts_cv2, voxel_size_x, voxel_size_y, voxel_size_z)
-                for key in shape_params.keys():
-                    data_key = f"Ellipse_{key}"
-                    if data_key in data:
-                        data[data_key].append(shape_params[key])
-            except Exception:
-                # if shape parameters fail, just continue
-                pass
+                frame_metrics['area'] = area * (voxel_size_x ** 2)
+                frame_metrics['area_pix'] = area
+                frame_metrics['perim_pix'] = perim
+                frame_metrics['volume'] = area * (voxel_size_x ** 2) * voxel_size_z
+                frame_metrics['perimeter'] = perim * voxel_size_x
+                frame_metrics['surface_area'] = perim * voxel_size_x * voxel_size_z
 
-            # record numeric data
-            data['area'].append(area * (voxel_size_x ** 2))
-            data['area_pix'].append(area)
-            data['perim_pix'].append(perim)
-            data['volume'].append(area * (voxel_size_x ** 2) * voxel_size_z)
-            data['perimeter'].append(perim * voxel_size_x)
-            data['surface_area'].append(perim * voxel_size_x * voxel_size_z)
-
-            # Create blank image and draw contour to make mask
-            zero_image = np.zeros_like(thresh)
-            try:
-                pts_for_draw = contour_pts_cv2
-                if pts_for_draw.ndim == 3 and pts_for_draw.shape[1] == 1:
-                    # already Nx1x2
-                    pass
-                elif pts_for_draw.ndim == 2:
-                    pts_for_draw = pts_for_draw.reshape((-1, 1, 2))
-                cv2.drawContours(zero_image, [pts_for_draw], -1, (255, 255, 255), thickness=-1)  # filled polygon
-            except Exception:
-                # fallback draw perimeter if filled draw fails
+                # shape parameters
                 try:
-                    cv2.drawContours(zero_image, [contour_pts_cv2], -1, (255, 255, 255), 2)
+                    shape_params = calculate_shape_parameters(contour_pts_cv2, voxel_size_x, voxel_size_y, voxel_size_z)
+                    if shape_params:
+                        for key, val in shape_params.items():
+                            data_key = f"Ellipse_{key}"
+                            if data_key in frame_metrics:
+                                frame_metrics[data_key] = val
                 except Exception:
                     pass
 
-            contour_stack.append(zero_image)
+                # Create blank image and draw contour to make mask
+                zero_image = np.zeros_like(thresh)
+                try:
+                    pts_for_draw = contour_pts_cv2
+                    if pts_for_draw.ndim == 3 and pts_for_draw.shape[1] == 1:
+                        pass
+                    elif pts_for_draw.ndim == 2:
+                        pts_for_draw = pts_for_draw.reshape((-1, 1, 2))
+                    cv2.drawContours(zero_image, [pts_for_draw], -1, (255, 255, 255), thickness=-1)
+                except Exception:
+                    try:
+                        cv2.drawContours(zero_image, [contour_pts_cv2], -1, (255, 255, 255), 2)
+                    except Exception:
+                        pass
+                contour_stack.append(zero_image)
+            else:
+                print(f"Frame {idx}: no contour selected; skipping.")
+                contour_stack.append(np.zeros_like(thresh))
+
+            # ALWAYS append exactly one value to all columns in data to prevent lengths mismatch
+            for k in data.keys():
+                data[k].append(frame_metrics[k])
 
         # After all frames processed
         

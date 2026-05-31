@@ -22,13 +22,13 @@ def check_and_install_dependencies():
             except Exception as e:
                 print(f"Error installing {dep}: {e}")
                 sys.exit(1)
-    print("✅ All dependencies checked successfully!")
+    print("[OK] All dependencies checked successfully!")
 
 def open_browser():
     # Wait for uvicorn server to start up
     time.sleep(1.5)
     url = "http://127.0.0.1:8000"
-    print(f"\n🚀 Opening browser at {url}...")
+    print(f"\n[INFO] Opening browser at {url}...")
     webbrowser.open(url)
 
 if __name__ == "__main__":
@@ -37,13 +37,13 @@ if __name__ == "__main__":
     # Start browser auto-opener in a separate background thread
     threading.Thread(target=open_browser, daemon=True).start()
     
-    print("\n🔥 Booting Uvicorn Localhost Server...")
+    print("\n[INFO] Booting Uvicorn Localhost Server...")
     try:
         import uvicorn
         # Import app object directly from server module
         from web_app.server import app
         uvicorn.run(app, host="127.0.0.1", port=8000)
     except KeyboardInterrupt:
-        print("\n👋 Server stopped by user.")
+        print("\n[INFO] Server stopped by user.")
     except Exception as e:
         print(f"Error starting server: {e}")

@@ -70,12 +70,60 @@ def convert_to_grayscale_3d(image_stack):
             
     return image_stack
 
-def load_image_file(file_path):
+def convert_to_color_3d(image_stack):
+    image_stack = np.asarray(image_stack)
+    
+    # 1. Standardize 2D grayscale array to 3D color shape (1, Y, X, 3)
+    if image_stack.ndim == 2:
+        color_img = cv2.cvtColor(image_stack, cv2.COLOR_GRAY2RGB)
+        return color_img[np.newaxis, ...]
+        
+    # 2. Check if 3D array
+    if image_stack.ndim == 3:
+        # Check if single RGB/RGBA image of shape (Y, X, C)
+        if image_stack.shape[-1] in [3, 4]:
+            return image_stack[np.newaxis, ...]
+        else:
+            # Grayscale stack (Z, Y, X). Convert each slice to RGB
+            color_slices = []
+            for i in range(image_stack.shape[0]):
+                color_slices.append(cv2.cvtColor(image_stack[i], cv2.COLOR_GRAY2RGB))
+            return np.stack(color_slices, axis=0)
+            
+    # 3. Check if 4D array, e.g. (Z, Y, X, C) or (Z, C, Y, X)
+    if image_stack.ndim == 4:
+        # If the last dimension is 3 or 4, it is already (Z, Y, X, C)
+        if image_stack.shape[-1] in [3, 4]:
+            return image_stack
+        # If the second dimension is 3 or 4, it is (Z, C, Y, X)
+        elif image_stack.shape[1] in [3, 4]:
+            color_slices = []
+            for i in range(image_stack.shape[0]):
+                slice_img = np.transpose(image_stack[i], (1, 2, 0)) # (C, Y, X) -> (Y, X, C)
+                color_slices.append(slice_img)
+            return np.stack(color_slices, axis=0)
+            
+    # If 5D or higher, squeeze all single dimensions and recurse
+    if image_stack.ndim > 4:
+        squeezed = np.squeeze(image_stack)
+        if squeezed.ndim < image_stack.ndim:
+            return convert_to_color_3d(squeezed)
+            
+    # Fallback: duplicate grayscale channels
+    gray = convert_to_grayscale_3d(image_stack)
+    color_slices = []
+    for i in range(gray.shape[0]):
+        color_slices.append(cv2.cvtColor(gray[i], cv2.COLOR_GRAY2RGB))
+    return np.stack(color_slices, axis=0)
+
+def load_image_file(file_path, return_color=False):
     ext = os.path.splitext(file_path)[1].lower()
 
     if ext == ".czi":
         if czifile is None:
             eg.msgbox("czifile not installed. Please install with: pip install czifile", "Error")
+            if return_color:
+                return None, None, None, None, None
             return None, None, None, None
 
         with czifile.CziFile(file_path) as czi:
@@ -98,9 +146,11 @@ def load_image_file(file_path):
             voxel_size_y = float(eg.enterbox(f"Voxel size Y (default {voxel_size_y})", "Confirm voxel size", str(voxel_size_y)))
             voxel_size_z = float(eg.enterbox(f"Voxel size Z (default {voxel_size_z})", "Confirm voxel size", str(voxel_size_z)))
             
-                
-            image_stack = convert_to_grayscale_3d(image_stack)
-            return image_stack, voxel_size_x, voxel_size_y, voxel_size_z
+            gray_stack = convert_to_grayscale_3d(image_stack)
+            if return_color:
+                color_stack = convert_to_color_3d(image_stack)
+                return gray_stack, color_stack, voxel_size_x, voxel_size_y, voxel_size_z
+            return gray_stack, voxel_size_x, voxel_size_y, voxel_size_z
 
     elif ext in [".tif", ".tiff"]:
         with tiff.TiffFile(file_path) as tif:
@@ -127,9 +177,14 @@ def load_image_file(file_path):
             if not voxel_size_z or not eg.ynbox(f"Detected voxel size Z = {voxel_size_z}. Use this?", "Confirm"):
                 voxel_size_z = float(eg.enterbox("Enter voxel size Z", "SMBL"))
 
-            image_stack = convert_to_grayscale_3d(image_stack)
-            return image_stack, voxel_size_x, voxel_size_y, voxel_size_z
+            gray_stack = convert_to_grayscale_3d(image_stack)
+            if return_color:
+                color_stack = convert_to_color_3d(image_stack)
+                return gray_stack, color_stack, voxel_size_x, voxel_size_y, voxel_size_z
+            return gray_stack, voxel_size_x, voxel_size_y, voxel_size_z
 
     else:
         eg.msgbox("Unsupported file format! Please provide a .czi or .tif/.tiff file.", "Error")
+        if return_color:
+            return None, None, None, None, None
         return None, None, None, None
