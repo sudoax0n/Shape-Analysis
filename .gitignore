@@ -1,0 +1,21 @@
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environments
+.venv/
+env/
+venv/
+ENV/
+
+# Temporary upload files
+temp_uploads/
+
+# Ignored data and bug reporting files
+bugs folder/
+
+# IDE configurations
+.vscode/
+.idea/
