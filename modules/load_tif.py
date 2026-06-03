@@ -160,10 +160,10 @@ def load_image_file(file_path, return_color=False):
             # Try extracting from tags
             if 'XResolution' in tif.pages[0].tags:
                 x_res = tif.pages[0].tags['XResolution'].value
-                voxel_size_x = 1 / x_res[0]
+                voxel_size_x = (1 / x_res[0]) * 1e-6
             if 'YResolution' in tif.pages[0].tags:
                 y_res = tif.pages[0].tags['YResolution'].value
-                voxel_size_y = 1 / y_res[0]
+                voxel_size_y = (1 / y_res[0]) * 1e-6
             if 'ImageDescription' in tif.pages[0].tags:
                 description = tif.pages[0].tags['ImageDescription'].value
                 if "spacing" in description:

@@ -333,7 +333,7 @@ with alive_bar(len(files)) as bar:
     for file in files:
         file_path = file
         # Load image stack and voxel information
-        image_stack, voxel_size_x, voxel_size_y, voxel_size_z = load_image_file(file_path)
+        image_stack, color_stack, voxel_size_x, voxel_size_y, voxel_size_z = load_image_file(file_path, return_color=True)
         # Ensure image_stack is (z, y, x) and uint8
         image_stack = np.squeeze(image_stack)
         if image_stack.ndim == 2:
@@ -343,6 +343,17 @@ with alive_bar(len(files)) as bar:
             image_stack = (image_stack / np.max(image_stack) * 255.0).astype(np.uint8)
         else:
             image_stack = image_stack.astype(np.uint8)
+
+        # Normalize the color stack for display (same 0-255 scaling as grayscale)
+        if color_stack is not None:
+            color_stack = np.asarray(color_stack)
+            color_stack = (color_stack - np.min(color_stack))
+            if np.max(color_stack) > 0:
+                color_stack = (color_stack / np.max(color_stack) * 255.0).astype(np.uint8)
+            else:
+                color_stack = color_stack.astype(np.uint8)
+        else:
+            color_stack = None
 
         print(fr'''
             File Information\n
@@ -373,7 +384,7 @@ with alive_bar(len(files)) as bar:
 
         # Preprocessing pipeline (your original call)
         try:
-            image_stack = color_the_stack(sliceit(histogram_stretching(image_stack)))
+            image_stack = color_the_stack(sliceit(histogram_stretching(image_stack), display_stack=color_stack))
         except Exception:
             # If color_the_stack fails or isn't desired, fallback to preprocessed stack
             image_stack = image_stack
@@ -393,11 +404,19 @@ with alive_bar(len(files)) as bar:
 
             if global_threshold_active:
                 _, thresh_global = cv2.threshold(blur, global_threshold_val, 255, cv2.THRESH_TOZERO)
-                contours, hierarchy = cv2.findContours(thresh_global, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                contours, _ = cv2.findContours(thresh_global, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+                # If the fixed global threshold finds nothing (e.g. dim pole slices of a vesicle),
+                # fall back to Otsu thresholding for this frame rather than silently skipping it.
+                if len(contours) == 0:
+                    print(f"Frame {idx}: global threshold {global_threshold_val} found no contours — falling back to Otsu.")
+                    _, thresh_otsu = cv2.threshold(blur, 0, 255, cv2.THRESH_OTSU + cv2.THRESH_TOZERO)
+                    contours, _ = cv2.findContours(thresh_otsu, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
                 if len(contours) == 0:
                     contour_pts_cv2 = None
                 else:
-                    max_contour = max(contours, key=lambda c: cv2.arcLength(c, closed=True))
+                    max_contour = max(contours, key=lambda c: cv2.contourArea(c))
                     try:
                         smoothed_contour, _ = adjust_epsilon_for_circularity(max_contour, 0.2, 100)
                     except Exception:
@@ -496,7 +515,10 @@ with alive_bar(len(files)) as bar:
             contour_stack_3d = (contour_stack_3d > 0).astype(np.uint8)
             # downsample for 3D plotting (if desired)
             try:
-                downsampled_stack = zoom(contour_stack_3d, (0.5, 0.5, 0.5), order=1)
+                # Only downsample Z if stack has enough slices; always downsample XY
+                nz = contour_stack_3d.shape[0]
+                zoom_z = 0.5 if nz > 20 else 1.0
+                downsampled_stack = zoom(contour_stack_3d, (zoom_z, 0.5, 0.5), order=1)
             except Exception:
                 downsampled_stack = contour_stack_3d
             # compute 3D surface area and volume
