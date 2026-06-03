@@ -410,6 +410,7 @@ with alive_bar(len(files)) as bar:
         # Process each frame and use interactive selector
         global_threshold_active = False
         global_threshold_val = 127
+        skipped_indices = []  # track frames the user clicked Skip on
 
         for idx, image in enumerate(image_stack):
             image = np.uint8(image)
@@ -446,6 +447,7 @@ with alive_bar(len(files)) as bar:
 
                 if frame_skipped:
                     print(f"Frame {idx}: skipped by user.")
+                    skipped_indices.append(idx)  # remember so we can retro-process later
                     # record zeros and move on — user will apply global from a later frame
                     for k in data.keys():
                         data[k].append(0.0)
@@ -456,6 +458,96 @@ with alive_bar(len(files)) as bar:
                     global_threshold_active = True
                     global_threshold_val = global_state.get("threshold", 127)
                     print(f"Global threshold activated: {global_threshold_val}")
+
+                    # Offer to retroactively apply threshold to any frames the user skipped
+                    if skipped_indices:
+                        retro = eg.ynbox(
+                            f"You skipped {len(skipped_indices)} earlier frame(s): {skipped_indices}.\n"
+                            f"Apply the same global threshold ({global_threshold_val}) to those frames too?",
+                            "SMBL - Apply to Skipped Frames"
+                        )
+                        if retro:
+                            print(f"Retroactively processing skipped frames {skipped_indices} with threshold {global_threshold_val}...")
+                            for si in skipped_indices:
+                                img_si  = np.uint8(image_stack[si])
+                                blur_si = cv2.GaussianBlur(img_si, (5, 5), 3)
+                                _, thresh_si = cv2.threshold(blur_si, 0, 255, cv2.THRESH_OTSU + cv2.THRESH_TOZERO)
+
+                                _, thresh_g = cv2.threshold(blur_si, global_threshold_val, 255, cv2.THRESH_TOZERO)
+                                ctrs, _ = cv2.findContours(thresh_g, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                                if len(ctrs) == 0:
+                                    print(f"  Frame {si} (retro): global threshold found no contours — falling back to Otsu.")
+                                    _, thresh_o = cv2.threshold(blur_si, 0, 255, cv2.THRESH_OTSU + cv2.THRESH_TOZERO)
+                                    ctrs, _ = cv2.findContours(thresh_o, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+                                if len(ctrs) == 0:
+                                    cpts = None
+                                else:
+                                    mc = max(ctrs, key=lambda c: cv2.contourArea(c))
+                                    try:
+                                        cpts, _ = adjust_epsilon_for_circularity(mc, 0.2, 100)
+                                    except Exception:
+                                        cpts = mc
+
+                                retro_metrics = {k: 0.0 for k in data.keys()}
+                                for k in retro_metrics:
+                                    if k.startswith('Ellipse_'):
+                                        retro_metrics[k] = np.nan
+
+                                zero_si = np.zeros_like(thresh_si)
+                                if cpts is not None:
+                                    try:
+                                        cpts_arr = cpts.reshape((-1, 2))
+                                        shp_si   = ShapelyPolygon(cpts_arr)
+                                        area_si  = float(shp_si.area)
+                                        perim_si = float(shp_si.length)
+                                    except Exception:
+                                        try:
+                                            area_si  = cv2.contourArea(cpts)
+                                            perim_si = cv2.arcLength(cpts, closed=True)
+                                        except Exception:
+                                            area_si = perim_si = 0.0
+
+                                    circ_si = 4 * np.pi * (area_si / (perim_si ** 2)) if perim_si > 0 else 0
+                                    print(f"  Frame {si} (retro): Area: {area_si:.1f} | Perimeter: {perim_si:.2f} | Circularity: {circ_si:.4f}")
+
+                                    retro_metrics['area']         = area_si * (voxel_size_x ** 2)
+                                    retro_metrics['area_pix']     = area_si
+                                    retro_metrics['perim_pix']    = perim_si
+                                    retro_metrics['volume']       = area_si * (voxel_size_x ** 2) * voxel_size_z
+                                    retro_metrics['perimeter']    = perim_si * voxel_size_x
+                                    retro_metrics['surface_area'] = perim_si * voxel_size_x * voxel_size_z
+
+                                    try:
+                                        sp = calculate_shape_parameters(cpts, voxel_size_x, voxel_size_y, voxel_size_z)
+                                        if sp:
+                                            for key, val in sp.items():
+                                                dk = f"Ellipse_{key}"
+                                                if dk in retro_metrics:
+                                                    retro_metrics[dk] = val
+                                    except Exception:
+                                        pass
+
+                                    try:
+                                        pts_draw = cpts
+                                        if pts_draw.ndim == 2:
+                                            pts_draw = pts_draw.reshape((-1, 1, 2))
+                                        cv2.drawContours(zero_si, [pts_draw], -1, (255, 255, 255), thickness=-1)
+                                    except Exception:
+                                        try:
+                                            cv2.drawContours(zero_si, [cpts], -1, (255, 255, 255), 2)
+                                        except Exception:
+                                            pass
+                                else:
+                                    print(f"  Frame {si} (retro): no contour found, keeping zeros.")
+
+                                # Replace the zeros we appended when we skipped this frame
+                                for k in data.keys():
+                                    data[k][si] = retro_metrics[k]
+                                contour_stack[si] = zero_si
+
+                            skipped_indices.clear()
+                            print("Retroactive processing complete.")
 
             # Initialize metrics for this frame with safe default fallbacks
             frame_metrics = {k: 0.0 for k in data.keys()}
