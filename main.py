@@ -100,6 +100,7 @@ def select_contour_interactive(image_gray, title="Frame", init_thresh=None):
     manual_used = False
     confirmed = {"val": False}  # mutable closure to detect confirm
     global_applied = {"val": False, "threshold": 127}
+    skipped = {"val": False}  # user clicked Skip Frame
     polygon_patch = None
 
     fig, ax = plt.subplots(figsize=(7, 7))
@@ -112,17 +113,19 @@ def select_contour_interactive(image_gray, title="Frame", init_thresh=None):
     ax_metrics = fig.add_axes([0.78, 0.1, 0.2, 0.15])
     ax_metrics.axis("off")
 
-    # Buttons & slider axes
+    # Buttons & slider axes  (Skip Frame added below Apply Globally)
     ax_btn_confirm = fig.add_axes([0.78, 0.78, 0.18, 0.06])
-    ax_btn_reset = fig.add_axes([0.78, 0.70, 0.18, 0.06])
-    ax_btn_manual = fig.add_axes([0.78, 0.62, 0.18, 0.06])
-    ax_btn_global = fig.add_axes([0.78, 0.54, 0.18, 0.06])
+    ax_btn_reset   = fig.add_axes([0.78, 0.70, 0.18, 0.06])
+    ax_btn_manual  = fig.add_axes([0.78, 0.62, 0.18, 0.06])
+    ax_btn_global  = fig.add_axes([0.78, 0.54, 0.18, 0.06])
+    ax_btn_skip    = fig.add_axes([0.78, 0.46, 0.18, 0.06])
     ax_slider = fig.add_axes([0.15, 0.05, 0.55, 0.04])
 
     btn_confirm = Button(ax_btn_confirm, "Confirm (→ next)")
-    btn_reset = Button(ax_btn_reset, "Reset Auto")
-    btn_manual = Button(ax_btn_manual, "Manual Polygon")
-    btn_global = Button(ax_btn_global, "Apply Globally")
+    btn_reset   = Button(ax_btn_reset,   "Reset Auto")
+    btn_manual  = Button(ax_btn_manual,  "Manual Polygon")
+    btn_global  = Button(ax_btn_global,  "Apply Globally")
+    btn_skip    = Button(ax_btn_skip,    "Skip Frame", color="#ffcc80", hovercolor="#ffa726")
     slider = Slider(ax_slider, "Threshold", 0, 255, valinit=127, valstep=1)
 
     # If we have an initial threshold guess, set slider
@@ -235,19 +238,31 @@ def select_contour_interactive(image_gray, title="Frame", init_thresh=None):
 
     btn_global.on_clicked(on_global)
 
+    def on_skip(event):
+        """Skip this frame — no contour saved, loop moves to the next frame."""
+        skipped["val"] = True
+        confirmed["val"] = True  # close cleanly
+        plt.close(fig)
+
+    btn_skip.on_clicked(on_skip)
+
     # Show window and block until closed (either confirm or user closes manually)
     plt.show()
+
+    # Skipped: return None contour + skipped flag
+    if skipped["val"]:
+        return None, False, global_applied, True
 
     # After closing, if confirmed, return contour and flag and global state
     if confirmed["val"] and current_contour is not None:
         contour = np.asarray(current_contour, dtype=np.int32)
         # ensure correct shape for cv2.drawContours: Nx1x2
         if contour.ndim == 2 and contour.shape[0] > 0:
-            return contour.reshape((-1, 1, 2)), manual_used, global_applied
+            return contour.reshape((-1, 1, 2)), manual_used, global_applied, False
     # if not confirmed but user closed window, return whatever current contour available and False
     if current_contour is None:
-        return None, False, global_applied
-    return np.asarray(current_contour, dtype=np.int32).reshape((-1, 1, 2)), manual_used, global_applied
+        return None, False, global_applied, False
+    return np.asarray(current_contour, dtype=np.int32).reshape((-1, 1, 2)), manual_used, global_applied, False
 
 # ---------------------------
 # Main script: iterate over files and frames
@@ -425,10 +440,18 @@ with alive_bar(len(files)) as bar:
                 userSelect = False
             else:
                 # Launch interactive selector for this frame, passing the raw image to prevent double drawing the contour
-                contour_pts_cv2, userSelect, global_state = select_contour_interactive(
+                contour_pts_cv2, userSelect, global_state, frame_skipped = select_contour_interactive(
                     image, title=f"{os.path.basename(file_path)} - frame {idx}", init_thresh=127
                 )
-                
+
+                if frame_skipped:
+                    print(f"Frame {idx}: skipped by user.")
+                    # record zeros and move on — user will apply global from a later frame
+                    for k in data.keys():
+                        data[k].append(0.0)
+                    contour_stack.append(np.zeros_like(thresh))
+                    continue
+
                 if global_state is not None and global_state.get("val"):
                     global_threshold_active = True
                     global_threshold_val = global_state.get("threshold", 127)
