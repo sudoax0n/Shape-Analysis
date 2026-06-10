@@ -66,6 +66,11 @@ This document lists the technical changes and bug fixes made to the Shape Analys
 *   **Problem**: The codebase lacked credits for new contributors.
 *   **Solution**: We updated the headers of the files we built or modified to include Abhinav's name, email (`ms24115@iisermohali.ac.in`), and GitHub profile (`https://github.com/sudoax0n`).
 
+### 13. Advanced Morphological Skeletonization & Center-Line Calibration
+*   **Files**: `modules/skeleton.py` [NEW], `main.py`
+*   **Problem**: Standard contour detection calculates perimeters on raw boundary outlines. Optical diffraction (PSF) and threshold bias distort these outlines. Directly summing grid pixels overestimates curve lengths by 5% to 8% because of digital metrication error.
+*   **Solution**: We integrated a 2D morphological skeletonization pipeline. A NetworkX graph-pruning algorithm removes noise branches while keeping the membrane loop topology intact. The Vossepoel & Smeulders statistical chain code formula corrects the digital grid-effect to achieve sub-pixel perimeter accuracy. A toggle switch and a noise filter slider configure parameters at startup, and the GUI overlays the pruned centerline.
+
 ---
 
 ## Local Web Application
