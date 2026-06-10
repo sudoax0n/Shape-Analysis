@@ -19,3 +19,7 @@ bugs folder/
 # IDE configurations
 .vscode/
 .idea/
+
+# Agent configuration
+gemini.md
+

@@ -2,7 +2,7 @@
 # Reuses modules written by Tanmay Pandey
 # Contact:
 #   Dr. Tripta Bhatia (Group Leader): bsoftmatter@gmail.com
-#   Abhinav: ms24115@gmail.com or https://github.com/sudoax0n
+#   Abhinav: ms24115@iisermohali.ac.in or https://github.com/sudoax0n
 
 import sys
 import os

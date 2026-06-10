@@ -124,4 +124,4 @@ If you use this suite in your research or publications, please cite the code usi
   📧 [itstanmaypandey@gmail.com](mailto:itstanmaypandey@gmail.com) | [ms22113@iisermohali.ac.in](mailto:ms22113@iisermohali.ac.in)
 
 * **Abhinav** (Contributor / Web Port Developer)  
-  📧 [ms24115@gmail.com](mailto:ms24115@gmail.com) | 💻 GitHub: [@sudoax0n](https://github.com/sudoax0n)
+  📧 [ms24115@iisermohali.ac.in](mailto:ms24115@iisermohali.ac.in) | 💻 GitHub: [@sudoax0n](https://github.com/sudoax0n)

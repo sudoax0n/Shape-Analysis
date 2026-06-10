@@ -24,37 +24,54 @@ def adjust_epsilon_for_circularity(contour, desired_circularity=0.8, max_iterati
     - smoothed_contour: The contour after smoothing that meets the circularity condition.
     - final_circularity: The circularity of the smoothed contour.
     """
-    def calculate_circularity(contour):
-        area = cv2.contourArea(contour)
-        perimeter = cv2.arcLength(contour, closed=True)
+    def calculate_circularity(c):
+        if c is None or len(c) < 3:
+            return 0
+        area = cv2.contourArea(c)
+        perimeter = cv2.arcLength(c, closed=True)
         if perimeter == 0:  # Avoid division by zero
             return 0
         try:
             circularity = (4 * np.pi * area) / (perimeter ** 2)
             return circularity
         except:
-            return None
+            return 0
+
+    orig_circularity = calculate_circularity(contour)
+    if orig_circularity >= desired_circularity or len(contour) < 4:
+        return contour, orig_circularity
 
     # Initialize epsilon as a small value relative to the contour's perimeter
     epsilon_coefficient = 0.001
     perimeter = cv2.arcLength(contour, closed=True)
     epsilon = epsilon_coefficient * perimeter
 
+    last_valid_contour = contour
+    last_valid_circularity = orig_circularity
+
     # Iterate and adjust epsilon until we meet the circularity condition or reach max iterations
     for _ in range(max_iterations):
         # Smooth the contour with the current epsilon
         smoothed_contour = cv2.approxPolyDP(contour, epsilon, closed=True)
 
+        if smoothed_contour is None or len(smoothed_contour) < 4:
+            # Collapsed! Stop simplifying further and return the last valid contour.
+            break
+
         # Calculate the circularity of the smoothed contour
         circularity = calculate_circularity(smoothed_contour)
 
+        # Track the last valid contour
+        last_valid_contour = smoothed_contour
+        last_valid_circularity = circularity
+
         # Check if the circularity is above the desired threshold
-        if circularity >= desired_circularity or abs(circularity - desired_circularity) <= tolerance or circularity == None:
+        if circularity >= desired_circularity or abs(circularity - desired_circularity) <= tolerance:
             return smoothed_contour, circularity
 
         # If not, adjust epsilon by decreasing it to retain more points (smoother contours reduce circularity)
         epsilon_coefficient *= 1.1  # Increase epsilon slightly
         epsilon = epsilon_coefficient * perimeter
 
-    # If no satisfactory result is found, return the last contour
-    return smoothed_contour, circularity
+    # If no satisfactory result is found, return the last valid contour (which has >= 4 points)
+    return last_valid_contour, last_valid_circularity

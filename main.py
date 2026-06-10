@@ -181,7 +181,7 @@ def select_contour_interactive(image_gray, title="Frame", init_thresh=None,
             pts_draw = np.array(contour_pts, dtype=np.int32)
             if pts_draw.ndim == 2:
                 pts_draw = pts_draw.reshape((-1, 1, 2))
-            cv2.drawContours(mask_tmp, [pts_draw], -1, 255, thickness=-1)
+            cv2.drawContours(mask_tmp, [pts_draw], -1, 255, thickness=1)
             try:
                 raw_skel = generate_skeleton(mask_tmp > 0)
                 pruned_skel = prune_skeleton(raw_skel, prune_threshold_pix)
@@ -581,7 +581,7 @@ with alive_bar(len(files)) as bar:
                                         pts_si_draw = cpts
                                         if pts_si_draw.ndim == 2:
                                             pts_si_draw = pts_si_draw.reshape((-1, 1, 2))
-                                        cv2.drawContours(mask_si_tmp, [pts_si_draw], -1, 255, thickness=-1)
+                                        cv2.drawContours(mask_si_tmp, [pts_si_draw], -1, 255, thickness=1)
                                         try:
                                             raw_skel_si = generate_skeleton(mask_si_tmp > 0)
                                             prune_pix_si = int(prune_threshold_um / voxel_size_x) if voxel_size_x > 0 else 15
@@ -662,7 +662,7 @@ with alive_bar(len(files)) as bar:
                     pts_draw = contour_pts_cv2
                     if pts_draw.ndim == 2:
                         pts_draw = pts_draw.reshape((-1, 1, 2))
-                    cv2.drawContours(mask_tmp, [pts_draw], -1, 255, thickness=-1)
+                    cv2.drawContours(mask_tmp, [pts_draw], -1, 255, thickness=1)
                     try:
                         raw_skel = generate_skeleton(mask_tmp > 0)
                         prune_pix = int(prune_threshold_um / voxel_size_x) if voxel_size_x > 0 else 15

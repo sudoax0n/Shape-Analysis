@@ -1,5 +1,5 @@
 # The launcher script to run the browser-based Shape Analysis App
-# Built by Abhinav (GitHub: https://github.com/sudoax0n | Email: ms24115@gmail.com), Soft Matter Biophysics Lab
+# Built by Abhinav (GitHub: https://github.com/sudoax0n | Email: ms24115@iisermohali.ac.in), Soft Matter Biophysics Lab
 # Simply run: python run_web_app.py
 
 import sys

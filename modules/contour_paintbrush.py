@@ -2,7 +2,7 @@
 # Modified and extended by Abhinav (GitHub: https://github.com/sudoax0n), Soft Matter Biophysics Lab
 # Contact:
 #   Dr. Tripta Bhatia (Group Leader): bsoftmatter@gmail.com
-#   Abhinav: ms24115@gmail.com or https://github.com/sudoax0n
+#   Abhinav: ms24115@iisermohali.ac.in or https://github.com/sudoax0n
 #   Tanmay Pandey: ms22113@iisermohali.ac.in or itstanmaypandey@gmail.com
 # Please cite if using this program:
 #       [1] "Shape Analysis of Biomimetic and Plasma Membrane Vesicles" https://doi.org/10.1002/syst.202400052
