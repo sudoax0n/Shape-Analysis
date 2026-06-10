@@ -20,6 +20,7 @@ try:
     import easygui as eg
     import pandas as pd
     from modules.load_tif import load_image_file
+    from modules.skeleton import generate_skeleton, prune_skeleton, calculate_vs_perimeter
     from modules.hist_stretching import histogram_stretching
     from modules.adjust_epsilon import adjust_epsilon_for_circularity
     from modules.align_contour import align_contours
@@ -44,7 +45,8 @@ except Exception:
 # ---------------------------
 # Helper: interactive contour selector per frame
 # ---------------------------
-def select_contour_interactive(image_gray, title="Frame", init_thresh=None):
+def select_contour_interactive(image_gray, title="Frame", init_thresh=None,
+                               use_skeletonization=False, prune_threshold_pix=15, voxel_size_x=1.0):
     """
     Shows a matplotlib window with:
       - image (plasma cmap)
@@ -102,6 +104,7 @@ def select_contour_interactive(image_gray, title="Frame", init_thresh=None):
     global_applied = {"val": False, "threshold": 127}
     skipped = {"val": False}  # user clicked Skip Frame
     polygon_patch = None
+    skeleton_plot_handle = None
 
     fig, ax = plt.subplots(figsize=(7, 7))
     plt.subplots_adjust(right=0.75, bottom=0.18)
@@ -136,7 +139,7 @@ def select_contour_interactive(image_gray, title="Frame", init_thresh=None):
     poly_selector = {"obj": None}
 
     def draw_contour_on_ax(contour_pts):
-        nonlocal polygon_patch
+        nonlocal polygon_patch, skeleton_plot_handle
         # remove existing patch
         if polygon_patch is not None:
             try:
@@ -144,6 +147,14 @@ def select_contour_interactive(image_gray, title="Frame", init_thresh=None):
             except Exception:
                 pass
             polygon_patch = None
+        # remove existing skeleton plot
+        if skeleton_plot_handle is not None:
+            try:
+                skeleton_plot_handle.remove()
+            except Exception:
+                pass
+            skeleton_plot_handle = None
+
         if contour_pts is None or len(contour_pts) == 0:
             fig.canvas.draw_idle()
             return
@@ -163,11 +174,33 @@ def select_contour_interactive(image_gray, title="Frame", init_thresh=None):
         except Exception:
             area = 0.0
             perim = 0.0
+
+        p_vs = 0.0
+        if use_skeletonization:
+            mask_tmp = np.zeros_like(img)
+            pts_draw = np.array(contour_pts, dtype=np.int32)
+            if pts_draw.ndim == 2:
+                pts_draw = pts_draw.reshape((-1, 1, 2))
+            cv2.drawContours(mask_tmp, [pts_draw], -1, 255, thickness=-1)
+            try:
+                raw_skel = generate_skeleton(mask_tmp > 0)
+                pruned_skel = prune_skeleton(raw_skel, prune_threshold_pix)
+                ys, xs = np.where(pruned_skel)
+                if len(xs) > 0:
+                    skeleton_plot_handle = ax.scatter(xs, ys, color='cyan', s=1, zorder=5)
+                # V&S perimeter scaled back to pixels for GUI consistency
+                p_vs, _ = calculate_vs_perimeter(pruned_skel, voxel_size_x)
+            except Exception:
+                pass
+
         # update metrics box
         ax_metrics.clear()
         ax_metrics.axis("off")
-        ax_metrics.text(0.01, 0.7, f"Area: {area:.2f}", fontsize=10, bbox=dict(facecolor="white", alpha=0.8))
-        ax_metrics.text(0.01, 0.25, f"Perimeter: {perim:.2f}", fontsize=10, bbox=dict(facecolor="white", alpha=0.8))
+        metrics_text = f"Area: {area:.2f}\nPerimeter: {perim:.2f}"
+        if use_skeletonization:
+            p_vs_pix = p_vs / voxel_size_x if voxel_size_x > 0 else p_vs
+            metrics_text += f"\nSkel Perim: {p_vs_pix:.2f}"
+        ax_metrics.text(0.01, 0.3, metrics_text, fontsize=10, bbox=dict(facecolor="white", alpha=0.8))
         fig.canvas.draw_idle()
 
     # initial draw
@@ -335,6 +368,26 @@ dir = eg.diropenbox('Open the parent directory', 'SMBL')
 if dir is None:
     raise SystemExit("No directory selected")
 
+# --- Interactive Skeletonization Toggle ---
+use_skeletonization = eg.ynbox(
+    "Do you want to enable Advanced Skeletonization & Center-Line analysis?",
+    "SMBL - Analysis Mode",
+    choices=("Yes, enable skeletonization", "No, standard contour analysis only")
+)
+
+prune_threshold_um = 1.5  # default 1.5 µm
+if use_skeletonization:
+    prune_val = eg.enterbox(
+        "Enter the spur pruning threshold in micrometers (µm):\n"
+        "(Any branches/spurs shorter than this length will be filtered out as noise)",
+        "SMBL - Pruning Threshold",
+        default="1.5"
+    )
+    try:
+        prune_threshold_um = float(prune_val)
+    except Exception:
+        prune_threshold_um = 1.5
+
 dirs = [x[0] for x in os.walk(dir)]
 for d in dirs:
     for f in os.listdir(d):
@@ -396,6 +449,9 @@ with alive_bar(len(files)) as bar:
             'area_pix': [],
             'perim_pix': []
         }
+        if use_skeletonization:
+            data['skel_perimeter'] = []
+            data['skel_perimeter_pix'] = []
 
         # Preprocessing pipeline (your original call)
         try:
@@ -441,8 +497,10 @@ with alive_bar(len(files)) as bar:
                 userSelect = False
             else:
                 # Launch interactive selector for this frame, passing the raw image to prevent double drawing the contour
+                prune_pix = int(prune_threshold_um / voxel_size_x) if voxel_size_x > 0 else 15
                 contour_pts_cv2, userSelect, global_state, frame_skipped = select_contour_interactive(
-                    image, title=f"{os.path.basename(file_path)} - frame {idx}", init_thresh=127
+                    image, title=f"{os.path.basename(file_path)} - frame {idx}", init_thresh=127,
+                    use_skeletonization=use_skeletonization, prune_threshold_pix=prune_pix, voxel_size_x=voxel_size_x
                 )
 
                 if frame_skipped:
@@ -518,6 +576,23 @@ with alive_bar(len(files)) as bar:
                                     retro_metrics['perimeter']    = perim_si * voxel_size_x
                                     retro_metrics['surface_area'] = perim_si * voxel_size_x * voxel_size_z
 
+                                    if use_skeletonization:
+                                        mask_si_tmp = np.zeros_like(thresh_si)
+                                        pts_si_draw = cpts
+                                        if pts_si_draw.ndim == 2:
+                                            pts_si_draw = pts_si_draw.reshape((-1, 1, 2))
+                                        cv2.drawContours(mask_si_tmp, [pts_si_draw], -1, 255, thickness=-1)
+                                        try:
+                                            raw_skel_si = generate_skeleton(mask_si_tmp > 0)
+                                            prune_pix_si = int(prune_threshold_um / voxel_size_x) if voxel_size_x > 0 else 15
+                                            pruned_skel_si = prune_skeleton(raw_skel_si, prune_pix_si)
+                                            p_vs_si, _ = calculate_vs_perimeter(pruned_skel_si, voxel_size_x)
+                                            retro_metrics['skel_perimeter'] = p_vs_si
+                                            retro_metrics['skel_perimeter_pix'] = p_vs_si / voxel_size_x if voxel_size_x > 0 else p_vs_si
+                                        except Exception:
+                                            retro_metrics['skel_perimeter'] = 0.0
+                                            retro_metrics['skel_perimeter_pix'] = 0.0
+
                                     try:
                                         sp = calculate_shape_parameters(cpts, voxel_size_x, voxel_size_y, voxel_size_z)
                                         if sp:
@@ -581,6 +656,24 @@ with alive_bar(len(files)) as bar:
                 frame_metrics['volume'] = area * (voxel_size_x ** 2) * voxel_size_z
                 frame_metrics['perimeter'] = perim * voxel_size_x
                 frame_metrics['surface_area'] = perim * voxel_size_x * voxel_size_z
+
+                if use_skeletonization:
+                    mask_tmp = np.zeros_like(thresh)
+                    pts_draw = contour_pts_cv2
+                    if pts_draw.ndim == 2:
+                        pts_draw = pts_draw.reshape((-1, 1, 2))
+                    cv2.drawContours(mask_tmp, [pts_draw], -1, 255, thickness=-1)
+                    try:
+                        raw_skel = generate_skeleton(mask_tmp > 0)
+                        prune_pix = int(prune_threshold_um / voxel_size_x) if voxel_size_x > 0 else 15
+                        pruned_skel = prune_skeleton(raw_skel, prune_pix)
+                        p_vs, _ = calculate_vs_perimeter(pruned_skel, voxel_size_x)
+                        frame_metrics['skel_perimeter'] = p_vs
+                        frame_metrics['skel_perimeter_pix'] = p_vs / voxel_size_x if voxel_size_x > 0 else p_vs
+                    except Exception as e:
+                        print(f"Error during skeletonization: {e}")
+                        frame_metrics['skel_perimeter'] = 0.0
+                        frame_metrics['skel_perimeter_pix'] = 0.0
 
                 # shape parameters
                 try:
