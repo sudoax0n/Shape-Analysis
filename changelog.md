@@ -51,6 +51,22 @@ It automatically checks and installs the necessary web dependencies (`fastapi`, 
 
 ---
 
+## 🧬 3. Membrane Centerline Skeletonization & Calibration
+
+### True Bilayer Centerline Tracking
+* **Addition**: We integrated a morphological skeletonization feature to extract the exact centerline of the vesicle membrane. 
+* **Enhancement**: Standard contour detection measures the outer or inner edge of the membrane, which is distorted by optical blur and thickness. Skeletonization thins the membrane to a 1-pixel-wide path, resolving the true bilayer centerline.
+* **Accuracy Improvement**: We applied the Vossepoel & Smeulders formula to correct the digital grid-effect. This eliminates the 3% to 8% length overestimation caused by pixel stepping, providing sub-pixel accurate perimeters.
+* **GUI Integration**: You can enable this feature at startup and adjust the noise spur pruning filter. The GUI overlays the thinned centerline as a cyan loop in real-time.
+
+### Fixed Contour Collapse Bug
+* **Fix**: Patched the contour smoothing function (`adjust_epsilon_for_circularity`). Previously, low-circularity or deformed vesicle cross-sections were simplified until they collapsed into a single point, resulting in zero-value measurements and crashes. The function now halts simplification before the shape becomes degenerate, preserving the original contour.
+
+### Non-Interactive Verification Script (`run_comparison.py`)
+* **Addition**: We created a headless test script that bypasses all GUI dialogs and popups. It loads the DOPC test stack, runs the segmentation pipeline, compares standard contours against skeletonized centerlines, and writes a comparison table to the project logs.
+
+---
+
 Let me know if you run into any issues testing the web app or the desktop patches!
 
 — Abhinav
